@@ -1,0 +1,66 @@
+name: appdates
+
+# Regenera appdates.csv (usado por el App Loader para la categoría "New apps")
+# a partir del git log, y lo commitea de vuelta a master.
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      # Evita el bucle infinito: el push que hace este propio workflow no lo redispara
+      - 'appdates.csv'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: appdates-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  appdates:
+    runs-on: ubuntu-latest
+    # bin/pre-publish.sh recorre el git log completo por cada app: es lento
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout con historial completo
+        uses: actions/checkout@v4
+        with:
+          # pre-publish.sh usa "git log --follow": necesita TODO el historial
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Use Node.js 18.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.x
+
+      - name: Instalar dependencias (sanitycheck usa acorn)
+        run: npm ci
+
+      - name: Proveer el comando "nodejs"
+        # pre-publish.sh invoca "nodejs", que no existe en ubuntu-latest
+        run: sudo ln -sf "$(command -v node)" /usr/local/bin/nodejs
+
+      - name: Generar appdates.csv
+        run: bash bin/pre-publish.sh
+
+      - name: Commit y push si ha cambiado
+        run: |
+          set -euo pipefail
+          if [ ! -s appdates.csv ]; then
+            echo "::error::appdates.csv no se ha generado o está vacío"
+            exit 1
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add appdates.csv
+          if git diff --cached --quiet -- appdates.csv; then
+            echo "appdates.csv sin cambios, nada que commitear."
+            exit 0
+          fi
+          # [skip ci] como segunda red contra bucles, además de paths-ignore
+          git commit -m "Update appdates.csv [skip ci]"
+          git push origin HEAD:master
